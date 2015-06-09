@@ -23,7 +23,9 @@ import com.ibm.streams.operator.model.InputPorts;
 import com.ibm.streams.operator.model.Libraries;
 import com.ibm.streams.operator.model.Parameter;
 import com.ibm.streams.operator.model.PrimitiveOperator;
-import com.ibm.streams.operator.samples.patterns.TupleConsumer;
+import com.ibm.streams.operator.AbstractOperator;
+import com.ibm.streams.operator.StreamingInput;
+import com.ibm.streams.operator.Tuple;
 
 /**
  * A Sink class operator that is connected to multiple websocket clients, 
@@ -37,7 +39,7 @@ import com.ibm.streams.operator.samples.patterns.TupleConsumer;
 @PrimitiveOperator( description=WebSocketSend.primDesc)
 @InputPorts({@InputPortSet(description=WebSocketSend.parmPortDesc, cardinality=1, optional=false, windowingMode=WindowMode.NonWindowed)})
 @Libraries("opt/wssupport/java_websocket.jar")
-public class WebSocketSend extends TupleConsumer {
+public class WebSocketSend extends AbstractOperator {
 
 	final static String primDesc =
 			"Operator transmits tuples recieved on the input port via WebSocket protocol to connected clients." +			
@@ -95,9 +97,6 @@ public class WebSocketSend extends TupleConsumer {
 			throws Exception {
 		super.initialize(context);
 
-        // we will be batching....
-        setBatchSize(getBatchSize());
-        
         // Setup connection 
         // TODO what to do if you have error here
         wsServer = new WSServer(portNum);
@@ -118,37 +117,31 @@ public class WebSocketSend extends TupleConsumer {
         wsServer.start();
     }
 
+    /**
+     * Process incoming tuples by submitting them directly to the
+     * wsServer
+     */
     @Override
-    protected final boolean processBatch(Queue<BatchedTuple> batch)
+    public synchronized void process(StreamingInput<Tuple> stream, Tuple tuple)
             throws Exception {
 
     	JSONEncoding jsonEncoding = EncodingFactory.getJSONEncoding();
     	
-        int tuplesInRequest = 0;
-        trace.log(TraceLevel.INFO,"processBatch() : batchSize:" + getBatchSize());
+        trace.log(TraceLevel.INFO,"process()");
         JSONArray tuples = new JSONArray();
-        for (Iterator<BatchedTuple> iter = batch.iterator(); iter.hasNext(); ) {
 
-            if (tuplesInRequest++ == getBatchSize())
-                break;
 
-            BatchedTuple item = iter.next();
-            iter.remove();
+        JSONObject jsonTuple = new JSONObject();
+        jsonTuple.put("tuple", jsonEncoding.encodeTuple(tuple));
+        tuples.add(jsonTuple);
 
-            JSONObject tuple = new JSONObject();
-            //tuple.put("tuple", jsonEncoding.encodeAsString(item.getTuple()));
-            tuple.put("tuple", jsonEncoding.encodeTuple(item.getTuple()));
-            //tuple.put("tuple", item.getTuple());
-            tuples.add(tuple);
-        }
         JSONObject message = new JSONObject();
         message.put("tuples", tuples);
-        trace.log(TraceLevel.INFO,"processBatch() : sending tuplesInRequest:" + tuplesInRequest);        
         int sentCount = wsServer.sendToAll(message);
+        trace.log(TraceLevel.INFO,"process() : sent:" + sentCount);
         getnClientsConnected().setValue(sentCount);
         getnMessagesSent().setValue(wsServer.getTotalSentCount());
-        return true;
-    }    
+    }
 
     /**
      * Shutdown this operator.
